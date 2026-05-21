@@ -1,0 +1,15 @@
+{
+  "name": "school-budget-api",
+  "version": "1.0.0",
+  "description": "API for school budget verification and monitoring system",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}
