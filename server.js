@@ -1,123 +1,112 @@
-// 1. استدعاء مكتبة Express وتجهيز السيرفر
 const express = require('express');
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
+// تفعيل قراءة البيانات بصيغة JSON
 app.use(express.json());
 
-// ==========================================
-// 2. قاعدة البيانات التجريبية (الخزنات المخزنة في السيرفر)
-// ==========================================
-
-// 👥 خزنة بيانات الأشخاص (المستخدمين) اللي عطيتيني دبا
+// قاعدة بيانات المستخدمين
 const users = [
     {
-        id: 1,
-        fullName: "مريم مساعد الإدريسي",
-        role: "student", // صفتها: تلميذة
-        grade: "الثالثة إعدادي",
-        schoolName: "الثانوية الإعدادية السلام",
-        region: "جهة سوس ماسة",
-        direction: "مديرية إنزكان أيت ملول"
+        role: "المدير",
+        name: "مروان مبروك",
+        institution: "الثانوية الإعدادية السلام - الدشيرة الجهادية",
+        email: "marouanmabrouke@taalim.ma"
     },
     {
-        id: 2,
-        fullName: "مروان مبروك",
-        role: "director", // صفته: مدير مدرسة
-        schoolName: "الثانوية الإعدادية السلام",
-        region: "جهة سوس ماسة",
-        direction: "مديرية إنزكان أيت ملول"
-    }
-];
-
-// 🏛️ خزنة الأسعار المرجعية العادلة في السوق
-const marketPrices = {
-    "طاولات مدرسية": 400,
-    "صباغة القاعات": 3000,
-    "حواسيب للإدارة": 5000
-};
-
-// 📂 خزنة الميزانيات والمشاريع
-let schoolBudgets = [
+        role: "ممثل الأساتذة",
+        name: "محمد الإدريسي",
+        institution: "الثانوية الإعدادية السلام",
+        email: "mohamedidrissi@taalim.ma"
+    },
     {
-        id: 1,
-        schoolName: "الثانوية الإعدادية السلام",
-        projectName: "تجديد قاعة الحسابيات",
-        items: [
-            { name: "حواسيب للإدارة", quantity: 2, price: 5200 }
-        ],
-        status: "approved" // منشورة ومقبولة، يعني التلميذة مريم تقدر تشوفها دبا
+        role: "رئيس جمعية الآباء",
+        name: "ياسين مرابط",
+        institution: "ثانوية السلام",
+        email: "yassinemorabite@taalim.ma"
+    },
+    {
+        role: "المتمدرس",
+        name: "مريم مساعد",
+        institution: "الثانوية الإعدادية السلام",
+        email: "meriemmousaid@taalim.ma"
+    },
+    {
+        role: "ولي الأمر",
+        name: "براهيم مساعد",
+        childName: "مريم مساعد",
+        institution: "الثانوية الإعدادية السلام",
+        email: "brahimemousaide@taalim.ma"
+    },
+    {
+        role: "المفتش",
+        name: "أيوب عليلو",
+        institutionsCovered: ["الثانوية الإعدادية السلام"],
+        email: "ayoubealilou@moufatiche.ma"
     }
 ];
 
-// ==========================================
-// 3. واجهات استقبال ساعي البريد (API Endpoints)
-// ==========================================
-
-// 🔐 عنوان لتسجيل الدخول والتعرف على الشخص (Login Endpoint)
-app.post('/api/login', (req, res) => {
-    const { name } = req.body; // ساعي البريد كيجيب الاسم لي كتبو المستخدم
-    
-    // السيرفر كيقلب فخزنة الأشخاص واش هاد الاسم كاين
-    const user = users.find(u => u.fullName === name);
-
-    if (!user) {
-        return res.status(404).json({
-            status: "error",
-            message: "❌ هاد الاسم غير مسجل في قواعد بيانات المؤسسة!"
-        });
-    }
-
-    // يلا لقى الاسم، السيرفر كيتعرف على الصلاحيات ديالو ويرد على ساعي البريد
-    res.status(200).json({
-        status: "success",
-        message: `👋 أهلاً بك يا ${user.fullName}`,
-        userData: user // السيرفر يصيفط كاع معلوماتو (واش تلميذ ولا مدير) باش التطبيق يفتح ليه الواجهة المناسبة
-    });
+// الصفحة الرئيسية
+app.get('/', (req, res) => {
+    res.send('السيرفر شغال بنجاح على Vercel 🚀');
 });
 
-// 📋 عنوان دراسة ومقارنة الميزانيات اللي كيرسلها المدير مروان
-app.post('/api/verify-budget', (req, res) => {
-    const incomingBudget = req.body;
-    let flaggedItems = [];
-    let isFraudDetected = false;
+// البحث عن مستخدم بالإيميل
+app.post('/api/search-user', (req, res) => {
 
-    incomingBudget.items.forEach(item => {
-        const fairPrice = marketPrices[item.name];
-        if (fairPrice) {
-            const maxAllowedPrice = fairPrice * 1.15; 
-            if (item.price > maxAllowedPrice) {
-                isFraudDetected = true;
-                flaggedItems.push({
-                    material: item.name,
-                    enteredPrice: item.price,
-                    marketPrice: fairPrice
-                });
-            }
-        }
-    });
+    const { email } = req.body;
 
-    if (isFraudDetected) {
+    // التحقق من وجود الإيميل
+    if (!email) {
         return res.status(400).json({
-            status: "rejected",
-            message: "⚠️ تم رفض حفظ الميزانية! النظام رصد نفخاً غير مبرر في الأسعار.",
-            details: flaggedItems
+            error: "المرجو إرسال البريد الإلكتروني"
         });
     }
 
-    incomingBudget.id = schoolBudgets.length + 1;
-    incomingBudget.status = "pending_approvals";
-    schoolBudgets.push(incomingBudget);
+    // البحث عن المستخدم
+    const user = users.find(
+        u => u.email.toLowerCase() === email.toLowerCase()
+    );
 
-    res.status(201).json({
-        status: "pending_approvals",
-        message: "✅ تم تسجيل الميزانية بنجاح. المشروع في انتظار مصادقة بقية الأعضاء."
+    // إذا وجد المستخدم
+    if (user) {
+        return res.status(200).json({
+            success: true,
+            message: "تم العثور على المستخدم",
+            data: user
+        });
+    }
+
+    // إذا لم يوجد
+    return res.status(404).json({
+        success: false,
+        message: "هذا المستخدم غير موجود"
     });
 });
 
-// ==========================================
-// 4. تشغيل المستمع
-// ==========================================
-app.listen(PORT, () => {
-    console.log(`🚀 السيرفر شغال دبا بالبيانات الجديدة على: http://localhost:${PORT}`);
+// Route إضافي لعرض جميع المستخدمين
+app.get('/api/users', (req, res) => {
+    res.status(200).json(users);
 });
+
+// معالجة الأخطاء العامة
+app.use((err, req, res, next) => {
+    console.error(err.stack);
+
+    res.status(500).json({
+        success: false,
+        error: "وقع خطأ داخل السيرفر"
+    });
+});
+
+// تشغيل السيرفر محلياً فقط
+if (process.env.NODE_ENV !== 'production') {
+
+    app.listen(PORT, () => {
+        console.log(`السيرفر شغال على http://localhost:${PORT}`);
+    });
+
+}
+
+// تصدير التطبيق لـ Vercel
+module.exports = app;
