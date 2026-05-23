@@ -4,469 +4,245 @@ const multer = require('multer');
 const sharp = require('sharp');
 const path = require('path');
 const fs = require('fs');
+const http = require('http');
+const socketIo = require('socket.io');
 
 const app = express();
+const server = http.createServer(app);
+const io = socketIo(server, { cors: { origin: "*" } });
+
 const PORT = process.env.PORT || 3000;
 
+/* =========================
+   MIDDLEWARE
+========================= */
 app.use(cors());
 app.use(express.json());
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
-// إنشاء مجلد uploads إذا لم يكن موجود
+/* =========================
+   SOCKET.IO
+========================= */
+io.on("connection", (socket) => {
+  console.log("User connected:", socket.id);
+});
+
+/* =========================
+   STORAGE (LOCAL - TEMP)
+========================= */
 const uploadDir = path.join(__dirname, 'uploads');
 
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir);
 }
 
-// إعداد Multer
-const storage = multer.memoryStorage();
+app.use('/uploads', express.static(uploadDir));
 
 const upload = multer({
-  storage,
-  limits: {
-    fileSize: 5 * 1024 * 1024 // 5MB
-  }
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 }
 });
 
-// قاعدة بيانات المستخدمين
-const users = [
-  {
-    user_id: "1",
-    role: "المدير",
-    name: "مروان مبروك",
-    school_name: "الثانوية الإعدادية السلام - الدشيرة الجهادية",
-    email: "marouanmabrouke@taalim.ma"
-  },
-  {
-    user_id: "2",
-    role: "ممثل الأساتذة",
-    name: "محمد الإدريسي",
-    school_name: "الثانوية الإعدادية السلام",
-    email: "mohamedidrissi@taalim.ma"
-  },
-  {
-    user_id: "3",
-    role: "رئيس جمعية الآباء",
-    name: "ياسين مرابط",
-    school_name: "ثانوية السلام",
-    email: "yassinemorabite@taalim.ma"
-  },
-  {
-    user_id: "4",
-    role: "التلميذ",
-    name: "مريم مساعد",
-    school_name: "الثانوية الإعدادية السلام",
-    email: "meriemmousaid@taalim.ma"
-  },
-  {
-    user_id: "5",
-    role: "ولي الأمر",
-    name: "براهيم مساعد",
-    school_name: "الثانوية الإعدادية السلام",
-    email: "brahimemousaide@taalim.ma"
-  },
-  {
-    user_id: "6",
-    role: "المفتش",
-    name: "أيوب عليلو",
-    school_name: "الثانوية الإعدادية السلام",
-    email: "ayoubealilou@moufatiche.ma"
-  }
-];
-
-// جدول المنشورات
+/* =========================
+   TEMP DATABASE
+========================= */
+const users = [];
 const posts = [];
-
-// جدول الموافقات
 const approvals = [];
-
-// جدول الإشعارات
 const notifications = [];
 
-// دالة الحماية وتنظيف البيانات
-function sanitizeAndValidate(data) {
-  if (!data || typeof data !== 'object') return null;
+/* =========================
+   HELPERS
+========================= */
+function sanitize(data) {
+  if (!data) return null;
+  const clean = {};
 
-  const sanitized = {};
-
-  for (let key in data) {
-    if (typeof data[key] === 'string') {
-      sanitized[key] = data[key]
-        .replace(/<\/?[^>]+(>|$)/g, "")
-        .trim();
-    } else {
-      sanitized[key] = data[key];
-    }
+  for (let k in data) {
+    clean[k] =
+      typeof data[k] === "string"
+        ? data[k].replace(/<\/?[^>]+(>|$)/g, "").trim()
+        : data[k];
   }
 
-  return sanitized;
+  return clean;
 }
 
-// التحقق من المؤسسة
-function isSameInstitution(inst1, inst2) {
-  if (!inst1 || !inst2) return false;
-
-  const clean = (str) =>
-    str.toLowerCase().replace(/[-\s]/g, '');
-
-  return (
-    clean(inst1).includes(clean(inst2)) ||
-    clean(inst2).includes(clean(inst1))
-  );
+function sameInstitution(a, b) {
+  if (!a || !b) return false;
+  const c = (s) => s.toLowerCase().replace(/[-\s]/g, '');
+  return c(a).includes(c(b)) || c(b).includes(c(a));
 }
 
-// محاكاة Push Notification
-function sendPushNotification(targetUsers, post) {
-  targetUsers.forEach(user => {
-    notifications.push({
-      user_id: user.user_id,
-      email: user.email,
-      school_name: user.school_name,
-      post_id: post.id,
-      message: `تم نشر منشور جديد خاص بمؤسستكم`,
-      timestamp: new Date()
-    });
-
-    console.log(`Push Notification Sent To: ${user.email}`);
-  });
+/* =========================
+   SOCKET NOTIFY
+========================= */
+function emitNewPost(post) {
+  io.emit("new_post", post);
 }
 
+/* =========================
+   ROUTES
+========================= */
+
+/* HOME */
 app.get('/', (req, res) => {
-  res.send('السيرفر شغال بنجاح على Vercel 🚀');
+  res.send('Server Running 🚀');
 });
 
-// البحث عن مستخدم
+/* USERS */
+app.get('/api/users', (req, res) => {
+  res.json(users);
+});
+
+/* SEARCH USER */
 app.post('/api/search-user', (req, res) => {
   const { email } = req.body;
 
-  if (!email) {
-    return res.status(400).json({
-      success: false,
-      message: "المرجو إرسال البريد الإلكتروني"
-    });
-  }
-
-  const user = users.find(
-    u => u.email.trim().toLowerCase() === email.trim().toLowerCase()
+  const user = users.find(u =>
+    u.email?.toLowerCase() === email?.toLowerCase()
   );
 
-  if (user) {
-    return res.status(200).json({
-      success: true,
-      message: "تم العثور على المستخدم",
-      user
-    });
-  }
-
-  return res.status(200).json({
-    success: false,
-    message: "عفوًا! هاد الإيميل ما لقيتووش ف السيرفر."
-  });
+  res.json({ success: !!user, user: user || null });
 });
 
-// جلب المستخدمين
-app.get('/api/users', (req, res) => {
-  return res.status(200).json(users);
-});
+/* =========================
+   CREATE POST
+========================= */
+app.post('/api/submit-data', upload.array('images', 10), async (req, res) => {
+  try {
+    const { email, content } = req.body;
 
-// إنشاء منشور جديد مع الصور
-app.post(
-  '/api/submit-data',
-  upload.array('images', 10),
-  async (req, res) => {
-    try {
-      const { email, content } = req.body;
-
-      if (!email || !content) {
-        return res.status(400).json({
-          success: false,
-          message: "المعطيات غير متكاملة"
-        });
-      }
-
-      const user = users.find(
-        u => u.email.trim().toLowerCase() === email.trim().toLowerCase()
-      );
-
-      if (!user) {
-        return res.status(403).json({
-          success: false,
-          message: "الحساب غير موجود"
-        });
-      }
-
-      const allowedRoles = [
-        "المدير",
-        "ممثل الأساتذة",
-        "رئيس جمعية الآباء"
-      ];
-
-      if (!allowedRoles.includes(user.role)) {
-        return res.status(403).json({
-          success: false,
-          message: "ليست لديك صلاحية إدخال المعطيات"
-        });
-      }
-
-      const safeContent = sanitizeAndValidate({ content });
-
-      if (!safeContent) {
-        return res.status(400).json({
-          success: false,
-          message: "المعطيات غير سليمة"
-        });
-      }
-
-      const imageUrls = [];
-
-      if (req.files && req.files.length > 0) {
-        for (const file of req.files) {
-          const fileName =
-            Date.now() + '-' + Math.round(Math.random() * 1E9) + '.jpg';
-
-          const filePath = path.join(uploadDir, fileName);
-
-          await sharp(file.buffer)
-            .resize({ width: 1200 })
-            .jpeg({ quality: 70 })
-            .toFile(filePath);
-
-          const imageUrl = `${req.protocol}://${req.get('host')}/uploads/${fileName}`;
-
-          imageUrls.push(imageUrl);
-        }
-      }
-
-      const postId = Date.now().toString();
-
-      const newPost = {
-        id: postId,
-        sender_id: user.user_id,
-        school_name: user.school_name,
-        content: safeContent.content,
-        images: imageUrls,
-        status: "Pending"
-      };
-
-      posts.push(newPost);
-
-      approvals.push({
-        post_id: postId,
-        director_approved: user.role === "المدير",
-        teachers_rep_approved: user.role === "ممثل الأساتذة",
-        parents_assoc_approved: user.role === "رئيس جمعية الآباء"
-      });
-
-      return res.status(200).json({
-        success: true,
-        message: "تم حفظ المنشور مؤقتاً في انتظار الموافقات",
-        post: newPost
-      });
-
-    } catch (error) {
-      console.error(error);
-
-      return res.status(500).json({
-        success: false,
-        message: "وقع خطأ أثناء معالجة الصور أو حفظ المنشور"
-      });
+    if (!email || !content) {
+      return res.status(400).json({ success: false });
     }
-  }
-);
 
-// الموافقة أو الرفض على المنشور
+    const user = users.find(u => u.email?.toLowerCase() === email?.toLowerCase());
+    if (!user) return res.status(403).json({ success: false });
+
+    const allowedRoles = ["المدير", "ممثل الأساتذة", "رئيس جمعية الآباء"];
+    if (!allowedRoles.includes(user.role)) {
+      return res.status(403).json({ success: false });
+    }
+
+    const safe = sanitize({ content });
+
+    const images = [];
+
+    if (req.files?.length) {
+      for (const file of req.files) {
+        const name = Date.now() + "-" + Math.random() + ".jpg";
+        const filePath = path.join(uploadDir, name);
+
+        await sharp(file.buffer)
+          .resize(1200)
+          .jpeg({ quality: 70 })
+          .toFile(filePath);
+
+        images.push(`${req.protocol}://${req.get('host')}/uploads/${name}`);
+      }
+    }
+
+    const post = {
+      id: Date.now().toString(),
+      sender_id: user.user_id,
+      school_name: user.school_name,
+      content: safe.content,
+      images,
+      status: "Pending"
+    };
+
+    posts.push(post);
+
+    approvals.push({
+      post_id: post.id,
+      director: user.role === "المدير",
+      teacher: user.role === "ممثل الأساتذة",
+      parents: user.role === "رئيس جمعية الآباء"
+    });
+
+    /* REAL-TIME UPDATE */
+    emitNewPost(post);
+
+    res.json({ success: true, post });
+
+  } catch (err) {
+    res.status(500).json({ success: false });
+  }
+});
+
+/* =========================
+   APPROVAL SYSTEM
+========================= */
 app.post('/api/confirm-data', (req, res) => {
   const { email, post_id, action } = req.body;
 
-  if (!email || !post_id || !action) {
-    return res.status(400).json({
-      success: false,
-      message: "المعطيات ناقصة"
-    });
-  }
-
-  const user = users.find(
-    u => u.email.trim().toLowerCase() === email.trim().toLowerCase()
-  );
-
-  if (!user) {
-    return res.status(403).json({
-      success: false,
-      message: "الحساب غير موجود"
-    });
-  }
-
-  const allowedRoles = [
-    "المدير",
-    "ممثل الأساتذة",
-    "رئيس جمعية الآباء"
-  ];
-
-  if (!allowedRoles.includes(user.role)) {
-    return res.status(403).json({
-      success: false,
-      message: "ليست لديك صلاحية التأكيد"
-    });
-  }
-
+  const user = users.find(u => u.email?.toLowerCase() === email?.toLowerCase());
   const post = posts.find(p => p.id === post_id);
-
-  if (!post) {
-    return res.status(404).json({
-      success: false,
-      message: "المنشور غير موجود"
-    });
-  }
-
-  if (!isSameInstitution(post.school_name, user.school_name)) {
-    return res.status(403).json({
-      success: false,
-      message: "لا يمكنك معالجة منشور تابع لمؤسسة أخرى"
-    });
-  }
-
   const approval = approvals.find(a => a.post_id === post_id);
 
-  if (!approval) {
-    return res.status(404).json({
-      success: false,
-      message: "بيانات الموافقة غير موجودة"
-    });
+  if (!user || !post || !approval) {
+    return res.status(404).json({ success: false });
   }
 
   if (action === "reject") {
     post.status = "Rejected";
-
-    return res.status(200).json({
-      success: true,
-      message: "تم رفض المنشور",
-      post
-    });
+    return res.json({ success: true, post });
   }
 
-  if (user.role === "المدير") {
-    approval.director_approved = true;
-  }
+  if (user.role === "المدير") approval.director = true;
+  if (user.role === "ممثل الأساتذة") approval.teacher = true;
+  if (user.role === "رئيس جمعية الآباء") approval.parents = true;
 
-  if (user.role === "ممثل الأساتذة") {
-    approval.teachers_rep_approved = true;
-  }
-
-  if (user.role === "رئيس جمعية الآباء") {
-    approval.parents_assoc_approved = true;
-  }
-
-  // التحقق من اكتمال الموافقات الثلاث
-  if (
-    approval.director_approved &&
-    approval.teachers_rep_approved &&
-    approval.parents_assoc_approved
-  ) {
+  if (approval.director && approval.teacher && approval.parents) {
     post.status = "Approved";
 
-    // البحث عن الحسابات المرتبطة بنفس المؤسسة
-    const targetUsers = users.filter(u => {
-      const allowedTargets = [
-        "التلميذ",
-        "ولي الأمر",
-        "المفتش"
-      ];
+    const targets = users.filter(u =>
+      ["التلميذ", "ولي الأمر", "المفتش"].includes(u.role) &&
+      sameInstitution(u.school_name, post.school_name)
+    );
 
-      return (
-        allowedTargets.includes(u.role) &&
-        isSameInstitution(u.school_name, post.school_name)
-      );
-    });
-
-    // إرسال الإشعارات
-    sendPushNotification(targetUsers, post);
-
-    return res.status(200).json({
+    return res.json({
       success: true,
-      message: "تمت الموافقة النهائية ونشر المنشور وإرسال الإشعارات",
+      message: "Approved",
       post,
-      targetUsers
+      targets
     });
   }
 
   post.status = "Pending";
 
-  return res.status(200).json({
-    success: true,
-    message: "تم تسجيل الموافقة، المنشور مازال في انتظار باقي الموافقات",
-    approvals: approval,
-    post
-  });
+  res.json({ success: true, post });
 });
 
-// جلب المنشورات المنشورة
+/* =========================
+   POSTS
+========================= */
 app.get('/api/get-published-data', (req, res) => {
-  const approvedPosts = posts.filter(
-    post => post.status === "Approved"
-  );
-
-  return res.status(200).json({
-    success: true,
-    data: approvedPosts
-  });
+  res.json(posts.filter(p => p.status === "Approved"));
 });
 
-// جلب المنشورات المعلقة
 app.get('/api/get-pending-data', (req, res) => {
-  const pendingPosts = posts.filter(
-    post => post.status === "Pending"
-  );
-
-  return res.status(200).json({
-    success: true,
-    data: pendingPosts
-  });
+  res.json(posts.filter(p => p.status === "Pending"));
 });
 
-// جلب الإشعارات
+/* =========================
+   NOTIFICATIONS (TEMP)
+========================= */
 app.post('/api/my-notifications', (req, res) => {
   const { email } = req.body;
 
-  if (!email) {
-    return res.status(400).json({
-      success: false,
-      message: "البريد الإلكتروني مطلوب"
-    });
-  }
-
-  const userNotifications = notifications.filter(
-    n => n.email.trim().toLowerCase() === email.trim().toLowerCase()
+  const data = notifications.filter(n =>
+    n.email?.toLowerCase() === email?.toLowerCase()
   );
 
-  return res.status(200).json({
-    success: true,
-    notifications: userNotifications
-  });
+  res.json({ success: true, data });
 });
 
-// جلب الموافقات
-app.get('/api/approvals', (req, res) => {
-  return res.status(200).json({
-    success: true,
-    approvals
-  });
+/* =========================
+   SERVER START
+========================= */
+server.listen(PORT, () => {
+  console.log(`Server running on http://localhost:${PORT}`);
 });
-
-// معالجة الأخطاء
-app.use((err, req, res, next) => {
-  console.error(err.stack);
-
-  res.status(500).json({
-    success: false,
-    error: "وقع خطأ داخل السيرفر"
-  });
-});
-
-if (process.env.NODE_ENV !== 'production') {
-  app.listen(PORT, () => {
-    console.log(`السيرفر شغال على http://localhost:${PORT}`);
-  });
-}
 
 module.exports = app;
