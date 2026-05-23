@@ -57,7 +57,7 @@ app.post('/api/search-user', (req, res) => {
     return res.status(400).json({ success: false, message: "المرجو إرسال البريد الإلكتروني" });
   }
   
-  const user = users.find(u => u.email.toLowerCase() === email.toLowerCase());
+  const user = users.find(u => u.email.trim().toLowerCase() === email.trim().toLowerCase());
   
   if (user) {
     // رجعنا الكلمة "user" باش تطابق مع الـ Frontend
@@ -87,7 +87,7 @@ app.post('/api/submit-data', (req, res) => {
     return res.status(400).json({ success: false, message: "المعطيات غير متكاملة" });
   }
   
-  const user = users.find(u => u.email.toLowerCase() === email.toLowerCase());
+  const user = users.find(u => u.email.trim().toLowerCase() === email.trim().toLowerCase());
   if (!user) {
     return res.status(403).json({ success: false, message: "الحساب غير موجود" });
   }
@@ -130,7 +130,7 @@ app.post('/api/confirm-data', (req, res) => {
     return res.status(400).json({ success: false, message: "المعطيات ناقصة" });
   }
   
-  const user = users.find(u => u.email.toLowerCase() === email.toLowerCase());
+  const user = users.find(u => u.email.trim().toLowerCase() === email.trim().toLowerCase());
   if (!user) {
     return res.status(403).json({ success: false, message: "الحساب غير موجود" });
   }
@@ -165,7 +165,7 @@ app.post('/api/confirm-data', (req, res) => {
     const finalData = {
       id: item.id,
       payload: item.payload,
-      creator: { name: users.find(u => u.email === item.creatorEmail).name, role: item.creatorRole },
+      creator: { name: users.find(u => u.email.trim().toLowerCase() === item.creatorEmail.trim().toLowerCase()).name, role: item.creatorRole },
       targetAccounts: targetAccounts.map(u => ({ name: u.name, role: u.role, email: u.email, institution: u.institution }))
     };
     
@@ -209,7 +209,7 @@ app.get('/api/get-published-data', (req, res) => {
 app.post('/api/my-notifications', (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ success: false, message: "البريد الإلكتروني مطلوب" });
-  const userNotifications = notifications.filter(n => n.email.toLowerCase() === email.toLowerCase());
+  const userNotifications = notifications.filter(n => n.email.trim().toLowerCase() === email.trim().toLowerCase());
   return res.status(200).json({ success: true, notifications: userNotifications });
 });
 
