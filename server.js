@@ -1,3 +1,4 @@
+require('dotenv').config(); // قراءة ملف .env إذا كان موجوداً
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
@@ -9,7 +10,10 @@ const socketIo = require('socket.io');
 
 const app = express();
 const server = http.createServer(app);
-const io = socketIo(server, { cors: { origin: "*" } });
+
+const io = socketIo(server, {
+  cors: { origin: "*" }
+});
 
 const PORT = process.env.PORT || 3000;
 
@@ -24,10 +28,18 @@ app.use(express.json());
 ========================= */
 io.on("connection", (socket) => {
   console.log("User connected:", socket.id);
+
+  socket.on("join", (userId) => {
+    socket.join(userId);
+  });
+
+  socket.on("disconnect", () => {
+    console.log("User disconnected:", socket.id);
+  });
 });
 
 /* =========================
-   STORAGE (LOCAL - TEMP)
+   STORAGE
 ========================= */
 const uploadDir = path.join(__dirname, 'uploads');
 
@@ -39,7 +51,9 @@ app.use('/uploads', express.static(uploadDir));
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 5 * 1024 * 1024 }
+  limits: {
+    fileSize: 5 * 1024 * 1024 // الحد الأقصى 5 ميغابايت
+  }
 });
 
 /* =========================
@@ -54,55 +68,59 @@ const notifications = [];
    HELPERS
 ========================= */
 function sanitize(data) {
-  if (!data) return null;
   const clean = {};
-
   for (let k in data) {
-    clean[k] =
-      typeof data[k] === "string"
-        ? data[k].replace(/<\/?[^>]+(>|$)/g, "").trim()
-        : data[k];
+    clean[k] = typeof data[k] === "string"
+      ? data[k].replace(/<\/?[^>]+(>|$)/g, "").trim()
+      : data[k];
   }
-
   return clean;
 }
 
 function sameInstitution(a, b) {
   if (!a || !b) return false;
-  const c = (s) => s.toLowerCase().replace(/[-\s]/g, '');
-  return c(a).includes(c(b)) || c(b).includes(c(a));
+  const clean = (s) => s.toLowerCase().replace(/[-\s]/g, '');
+  return clean(a).includes(clean(b)) || clean(b).includes(clean(a));
+}
+
+function createNotification(userId, message, data = {}) {
+  const notif = {
+    id: Date.now().toString() + Math.random(),
+    userId,
+    message,
+    data,
+    read: false,
+    createdAt: new Date()
+  };
+
+  notifications.push(notif);
+  io.to(userId).emit("notification", notif);
+  return notif;
 }
 
 /* =========================
-   SOCKET NOTIFY
+   HOME
 ========================= */
-function emitNewPost(post) {
-  io.emit("new_post", post);
-}
-
-/* =========================
-   ROUTES
-========================= */
-
-/* HOME */
 app.get('/', (req, res) => {
   res.send('Server Running 🚀');
 });
 
-/* USERS */
+/* =========================
+   USERS
+========================= */
 app.get('/api/users', (req, res) => {
   res.json(users);
 });
 
-/* SEARCH USER */
 app.post('/api/search-user', (req, res) => {
   const { email } = req.body;
-
-  const user = users.find(u =>
-    u.email?.toLowerCase() === email?.toLowerCase()
+  const user = users.find(
+    u => u.email?.toLowerCase() === email?.toLowerCase()
   );
-
-  res.json({ success: !!user, user: user || null });
+  res.json({
+    success: !!user,
+    user: user || null
+  });
 });
 
 /* =========================
@@ -112,130 +130,214 @@ app.post('/api/submit-data', upload.array('images', 10), async (req, res) => {
   try {
     const { email, content } = req.body;
 
-    if (!email || !content) {
-      return res.status(400).json({ success: false });
-    }
+    const user = users.find(
+      u => u.email?.toLowerCase() === email?.toLowerCase()
+    );
 
-    const user = users.find(u => u.email?.toLowerCase() === email?.toLowerCase());
-    if (!user) return res.status(403).json({ success: false });
-
-    const allowedRoles = ["المدير", "ممثل الأساتذة", "رئيس جمعية الآباء"];
-    if (!allowedRoles.includes(user.role)) {
-      return res.status(403).json({ success: false });
+    if (!user) {
+      return res.status(403).json({
+        success: false,
+        message: "User not found"
+      });
     }
 
     const safe = sanitize({ content });
-
     const images = [];
 
     if (req.files?.length) {
       for (const file of req.files) {
-        const name = Date.now() + "-" + Math.random() + ".jpg";
-        const filePath = path.join(uploadDir, name);
+        const fileName = Date.now() + "-" + Math.round(Math.random() * 1e9) + ".jpg";
+        const filePath = path.join(uploadDir, fileName);
 
         await sharp(file.buffer)
-          .resize(1200)
+          .resize({ width: 1200, withoutEnlargement: true })
           .jpeg({ quality: 70 })
           .toFile(filePath);
 
-        images.push(`${req.protocol}://${req.get('host')}/uploads/${name}`);
+        const imageUrl = `${req.protocol}://${req.get('host')}/uploads/${fileName}`;
+        images.push(imageUrl);
       }
     }
 
     const post = {
       id: Date.now().toString(),
       sender_id: user.user_id,
+      sender_role: user.role,
       school_name: user.school_name,
       content: safe.content,
       images,
-      status: "Pending"
+      status: "Pending",
+      createdAt: new Date()
     };
 
     posts.push(post);
 
-    approvals.push({
+    const approval = {
       post_id: post.id,
       director: user.role === "المدير",
       teacher: user.role === "ممثل الأساتذة",
-      parents: user.role === "رئيس جمعية الآباء"
-    });
+      parents: user.role === "رئيس جمعية الآباء",
+      rejected: false,
+      rejectedBy: null,
+      approvedAt: null
+    };
 
-    /* REAL-TIME UPDATE */
-    emitNewPost(post);
-
-    res.json({ success: true, post });
-
-  } catch (err) {
-    res.status(500).json({ success: false });
-  }
-});
-
-/* =========================
-   APPROVAL SYSTEM
-========================= */
-app.post('/api/confirm-data', (req, res) => {
-  const { email, post_id, action } = req.body;
-
-  const user = users.find(u => u.email?.toLowerCase() === email?.toLowerCase());
-  const post = posts.find(p => p.id === post_id);
-  const approval = approvals.find(a => a.post_id === post_id);
-
-  if (!user || !post || !approval) {
-    return res.status(404).json({ success: false });
-  }
-
-  if (action === "reject") {
-    post.status = "Rejected";
-    return res.json({ success: true, post });
-  }
-
-  if (user.role === "المدير") approval.director = true;
-  if (user.role === "ممثل الأساتذة") approval.teacher = true;
-  if (user.role === "رئيس جمعية الآباء") approval.parents = true;
-
-  if (approval.director && approval.teacher && approval.parents) {
-    post.status = "Approved";
+    approvals.push(approval);
 
     const targets = users.filter(u =>
-      ["التلميذ", "ولي الأمر", "المفتش"].includes(u.role) &&
+      ["المدير", "ممثل الأساتذة", "رئيس جمعية الآباء"].includes(u.role) &&
+      u.user_id !== user.user_id &&
       sameInstitution(u.school_name, post.school_name)
     );
 
-    return res.json({
+    targets.forEach(target => {
+      createNotification(
+        target.user_id,
+        "هناك منشور جديد يحتاج إلى التأكيد أو الرفض",
+        { post_id: post.id, type: "approval_request" }
+      );
+      io.to(target.user_id).emit("approval_request", { post });
+    });
+
+    io.emit("new_post_pending", post);
+
+    res.json({
       success: true,
-      message: "Approved",
       post,
-      targets
+      approval
+    });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({
+      success: false,
+      message: "Server Error"
     });
   }
-
-  post.status = "Pending";
-
-  res.json({ success: true, post });
 });
 
 /* =========================
-   POSTS
+   CONFIRM OR REJECT POST
+========================= */
+app.post('/api/confirm-data', (req, res) => {
+  try {
+    const { email, post_id, action } = req.body;
+
+    const user = users.find(u => u.email?.toLowerCase() === email?.toLowerCase());
+    const post = posts.find(p => p.id === post_id);
+    const approval = approvals.find(a => a.post_id === post_id);
+
+    if (!user || !post || !approval) {
+      return res.status(404).json({ success: false, message: "Data not found" });
+    }
+
+    if (!["المدير", "ممثل الأساتذة", "رئيس جمعية الآباء"].includes(user.role)) {
+      return res.status(403).json({ success: false, message: "Unauthorized" });
+    }
+
+    if (action === "reject") {
+      approval.rejected = true;
+      approval.rejectedBy = user.role;
+      post.status = "Rejected";
+
+      createNotification(
+        post.sender_id,
+        `تم رفض المنشور من طرف ${user.role}`,
+        { post_id, type: "rejected" }
+      );
+
+      io.to(post.sender_id).emit("post_rejected", { post_id, rejectedBy: user.role });
+
+      return res.json({ success: true, status: "Rejected", post });
+    }
+
+    if (action === "confirm") {
+      if (user.role === "المدير") approval.director = true;
+      if (user.role === "ممثل الأساتذة") approval.teacher = true;
+      if (user.role === "رئيس جمعية الآباء") approval.parents = true;
+
+      createNotification(
+        post.sender_id,
+        `قام ${user.role} بتأكيد المنشور`,
+        { post_id, type: "confirmed" }
+      );
+
+      const confirmedCount = [
+        approval.director,
+        approval.teacher,
+        approval.parents
+      ].filter(v => v === true).length;
+
+      if (confirmedCount >= 2) {
+        post.status = "Approved";
+        approval.approvedAt = new Date();
+
+        const publishTargets = users.filter(u =>
+          ["التلميذ", "ولي الأمر", "المفتش"].includes(u.role) &&
+          sameInstitution(u.school_name, post.school_name)
+        );
+
+        publishTargets.forEach(target => {
+          createNotification(
+            target.user_id,
+            "تم نشر معطيات جديدة",
+            { post_id, type: "published" }
+          );
+          io.to(target.user_id).emit("published_post", { post });
+        });
+
+        io.emit("post_approved", post);
+
+        return res.json({
+          success: true,
+          message: "Post approved successfully",
+          post,
+          publishTargets
+        });
+      }
+
+      post.status = "Waiting Second Approval";
+
+      return res.json({
+        success: true,
+        message: "First approval completed",
+        post,
+        approval
+      });
+    }
+
+    res.status(400).json({ success: false, message: "Invalid action" });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: "Server Error" });
+  }
+});
+
+/* =========================
+   GET POSTS & NOTIFICATIONS
 ========================= */
 app.get('/api/get-published-data', (req, res) => {
-  res.json(posts.filter(p => p.status === "Approved"));
+  res.json({ success: true, data: posts.filter(p => p.status === "Approved") });
 });
 
 app.get('/api/get-pending-data', (req, res) => {
-  res.json(posts.filter(p => p.status === "Pending"));
+  res.json({ success: true, data: posts.filter(p => p.status === "Pending" || p.status === "Waiting Second Approval") });
 });
 
-/* =========================
-   NOTIFICATIONS (TEMP)
-========================= */
-app.post('/api/my-notifications', (req, res) => {
-  const { email } = req.body;
+app.get('/api/get-rejected-data', (req, res) => {
+  res.json({ success: true, data: posts.filter(p => p.status === "Rejected") });
+});
 
-  const data = notifications.filter(n =>
-    n.email?.toLowerCase() === email?.toLowerCase()
-  );
+app.get('/api/notifications/:userId', (req, res) => {
+  res.json({ success: true, data: notifications.filter(n => n.userId === req.params.userId) });
+});
 
-  res.json({ success: true, data });
+app.post('/api/notifications/read', (req, res) => {
+  const { notificationId } = req.body;
+  const notif = notifications.find(n => n.id === notificationId);
+  if (notif) notif.read = true;
+  res.json({ success: true });
 });
 
 /* =========================
